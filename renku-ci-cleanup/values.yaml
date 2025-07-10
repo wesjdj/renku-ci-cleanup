@@ -27,7 +27,7 @@ cronJob:
 # Cleanup configuration
 cleanup:
   # Maximum age in hours for CI deployments before cleanup
-  maxAge: 72
+  maxAge: 720
   
   # Label used to exempt namespaces from cleanup
   # Namespaces with this label will be skipped regardless of age
@@ -36,6 +36,8 @@ cleanup:
   # Namespace name patterns to match (regex patterns)
   # Only namespaces matching these patterns will be considered for cleanup
   namespacePatterns:
+    - "^ci-renku-.*"
+    - "^renku-blog-ci-.*"
     - "^renku-ci-.*"
   
   # Enable strict name pattern matching (default: true)

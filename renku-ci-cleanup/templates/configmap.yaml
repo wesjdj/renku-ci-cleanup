@@ -117,12 +117,12 @@ data:
         fi
         
         # For matching namespaces, show age comparison with culling threshold
-        local remaining_seconds=$((MAX_AGE_SECONDS - age_seconds))
-        local remaining_hours=$((remaining_seconds / 3600))
+        remaining_seconds=$((MAX_AGE_SECONDS - age_seconds))
+        remaining_hours=$((remaining_seconds / 3600))
         if [ "$remaining_seconds" -gt 0 ]; then
           echo "  → Namespace $namespace has ${remaining_hours}h remaining before cleanup (${age_display} < {{ .Values.cleanup.maxAge }}h threshold)"
         else
-          local overdue_hours=$((-remaining_hours))
+          overdue_hours=$((-remaining_hours))
           echo "  → Namespace $namespace is ${overdue_hours}h overdue for cleanup (${age_display} > {{ .Values.cleanup.maxAge }}h threshold)"
         fi
         
