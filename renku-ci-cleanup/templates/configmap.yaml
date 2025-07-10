@@ -30,8 +30,22 @@ data:
     calculate_age() {
         local timestamp="$1"
         local current_time=$(date +%s)
-        local creation_time=$(date -d "$timestamp" +%s 2>/dev/null || echo "0")
-        echo $((current_time - creation_time))
+        # Kubernetes timestamps are in ISO 8601 format, need to handle them properly
+        local creation_time
+        if command -v gdate >/dev/null 2>&1; then
+            # Use GNU date if available (macOS with coreutils)
+            creation_time=$(gdate -d "$timestamp" +%s 2>/dev/null || echo "0")
+        else
+            # Convert ISO 8601 to a format that BSD date can handle
+            local converted_timestamp=$(echo "$timestamp" | sed 's/T/ /' | sed 's/Z$//')
+            creation_time=$(date -j -f "%Y-%m-%d %H:%M:%S" "$converted_timestamp" +%s 2>/dev/null || echo "0")
+        fi
+        
+        if [ "$creation_time" = "0" ]; then
+            echo "0"
+        else
+            echo $((current_time - creation_time))
+        fi
     }
     
     # Function to format age for display
@@ -41,7 +55,7 @@ data:
         local age_days=$((age_hours / 24))
         
         if [ $age_days -gt 0 ]; then
-            echo "${age_days}d ${age_hours}h"
+            echo "${age_days}d $((age_hours % 24))h"
         else
             echo "${age_hours}h"
         fi
