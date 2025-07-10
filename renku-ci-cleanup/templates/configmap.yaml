@@ -30,21 +30,31 @@ data:
     calculate_age() {
         local timestamp="$1"
         local current_time=$(date +%s)
+        
+        # Debug: Show what timestamp we received
+        echo "  → Debug: Raw timestamp: '$timestamp'" >&2
+        
         # Kubernetes timestamps are in ISO 8601 format, need to handle them properly
         local creation_time
         if command -v gdate >/dev/null 2>&1; then
             # Use GNU date if available (macOS with coreutils)
             creation_time=$(gdate -d "$timestamp" +%s 2>/dev/null || echo "0")
+            echo "  → Debug: Using gdate, parsed to: $creation_time" >&2
         else
             # Convert ISO 8601 to a format that BSD date can handle
             local converted_timestamp=$(echo "$timestamp" | sed 's/T/ /' | sed 's/Z$//')
+            echo "  → Debug: Converted timestamp: '$converted_timestamp'" >&2
             creation_time=$(date -j -f "%Y-%m-%d %H:%M:%S" "$converted_timestamp" +%s 2>/dev/null || echo "0")
+            echo "  → Debug: Using BSD date, parsed to: $creation_time" >&2
         fi
         
         if [ "$creation_time" = "0" ]; then
+            echo "  → Debug: Failed to parse timestamp, returning 0" >&2
             echo "0"
         else
-            echo $((current_time - creation_time))
+            local age_seconds=$((current_time - creation_time))
+            echo "  → Debug: Current time: $current_time, Creation time: $creation_time, Age: $age_seconds seconds" >&2
+            echo "$age_seconds"
         fi
     }
     
@@ -81,9 +91,11 @@ data:
     MAX_AGE_SECONDS=$(( {{ .Values.cleanup.maxAge }} * 3600 ))
     
     # Find and process all namespaces
+    echo "Debug: Getting namespace data..." >&2
     kubectl get namespaces \
       -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.creationTimestamp}{"\t"}{.metadata.labels}{"\n"}{end}' | \
       while IFS=$'\t' read -r namespace timestamp labels; do
+        echo "Debug: Read line - namespace: '$namespace', timestamp: '$timestamp', labels: '$labels'" >&2
         if [ -z "$namespace" ] || [ -z "$timestamp" ]; then
           continue
         fi
