@@ -1,0 +1,119 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "renku-ci-cleanup.fullname" . }}-script
+  labels:
+    {{- include "renku-ci-cleanup.labels" . | nindent 4 }}
+data:
+  cleanup.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "Starting Renku CI deployment cleanup..."
+    echo "Max age: {{ .Values.cleanup.maxAge }} hours"
+    echo "Exemption label: {{ .Values.cleanup.exemptionLabel }}"
+    {{- if .Values.cleanup.enforceNamePatterns }}
+    echo "Name pattern enforcement: enabled"
+    echo "Allowed patterns:"
+    {{- range .Values.cleanup.namespacePatterns }}
+    echo "  - {{ . }}"
+    {{- end }}
+    {{- else }}
+    echo "Name pattern enforcement: disabled"
+    {{- end }}
+    
+    {{- if .Values.cleanup.dryRun }}
+    echo "DRY RUN MODE: No actual deletions will be performed"
+    {{- end }}
+    
+    # Function to calculate age in seconds
+    calculate_age() {
+        local timestamp="$1"
+        local current_time=$(date +%s)
+        local creation_time=$(date -d "$timestamp" +%s 2>/dev/null || echo "0")
+        echo $((current_time - creation_time))
+    }
+    
+    # Function to format age for display
+    format_age() {
+        local age_seconds="$1"
+        local age_hours=$((age_seconds / 3600))
+        local age_days=$((age_hours / 24))
+        
+        if [ $age_days -gt 0 ]; then
+            echo "${age_days}d ${age_hours}h"
+        else
+            echo "${age_hours}h"
+        fi
+    }
+    
+    # Function to check if namespace matches any allowed pattern
+    matches_pattern() {
+        local namespace="$1"
+        {{- if .Values.cleanup.enforceNamePatterns }}
+        {{- range .Values.cleanup.namespacePatterns }}
+        if [[ "$namespace" =~ {{ . }} ]]; then
+            return 0
+        fi
+        {{- end }}
+        return 1
+        {{- else }}
+        # Pattern enforcement disabled, always return true
+        return 0
+        {{- end }}
+    }
+    
+    # Get maximum age in seconds
+    MAX_AGE_SECONDS=$(( {{ .Values.cleanup.maxAge }} * 3600 ))
+    
+    # Find and process all namespaces
+    kubectl get namespaces \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.creationTimestamp}{"\t"}{.metadata.labels}{"\n"}{end}' | \
+      while IFS=$'\t' read -r namespace timestamp labels; do
+        if [ -z "$namespace" ] || [ -z "$timestamp" ]; then
+          continue
+        fi
+        
+        age_seconds=$(calculate_age "$timestamp")
+        age_display=$(format_age "$age_seconds")
+        
+        echo "Checking namespace: $namespace (age: $age_display)"
+        
+        # Check if namespace is exempt from cleanup
+        if [[ "$labels" == *"{{ .Values.cleanup.exemptionLabel | replace "=" "\\=" }}"* ]]; then
+          echo "  → Namespace $namespace is exempt from cleanup (has exemption label), skipping"
+          continue
+        fi
+        
+        # Check if namespace matches allowed patterns
+        if ! matches_pattern "$namespace"; then
+          echo "  → Namespace $namespace does not match any allowed patterns, skipping"
+          continue
+        fi
+        
+        if [ "$age_seconds" -gt "$MAX_AGE_SECONDS" ]; then
+          echo "  → Namespace $namespace is older than {{ .Values.cleanup.maxAge }} hours, cleaning up..."
+          
+          {{- if .Values.cleanup.dryRun }}
+          echo "  → DRY RUN: Would clean up namespace $namespace"
+          {{- else }}
+          # Use rdu cleanup command with force flag to avoid interactive prompts
+          if command -v rdu >/dev/null 2>&1; then
+            echo "  → Using rdu cleanupdeployment for namespace $namespace"
+            rdu cleanupdeployment --namespace "$namespace" --delete-namespace --force || {
+              echo "  → Warning: rdu cleanup failed for $namespace, attempting manual cleanup"
+              kubectl delete namespace "$namespace" --timeout=300s || echo "  → Failed to delete namespace $namespace"
+            }
+          else
+            echo "  → rdu not available, performing manual cleanup"
+            kubectl delete namespace "$namespace" --timeout=300s || echo "  → Failed to delete namespace $namespace"
+          fi
+          {{- end }}
+          
+          echo "  → Cleanup completed for namespace: $namespace"
+        else
+          echo "  → Namespace $namespace is within age limit (${age_display} < {{ .Values.cleanup.maxAge }}h), skipping"
+        fi
+      done
+    
+    echo "Renku CI deployment cleanup completed"
