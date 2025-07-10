@@ -31,15 +31,11 @@ data:
         local timestamp="$1"
         local current_time=$(date +%s)
         
-        # Debug: Show what timestamp we received
-        echo "  → Debug: Raw timestamp: '$timestamp'" >&2
-        
         # Kubernetes timestamps are in ISO 8601 format, need to handle them properly
         local creation_time
         if command -v gdate >/dev/null 2>&1; then
             # Use GNU date if available (Linux with coreutils)
             creation_time=$(gdate -d "$timestamp" +%s 2>/dev/null || echo "0")
-            echo "  → Debug: Using gdate, parsed to: $creation_time" >&2
         else
             # For Alpine Linux/BusyBox date, we need to parse the ISO 8601 format manually
             # Format: 2025-05-28T13:50:39Z
@@ -53,18 +49,13 @@ data:
             
             # Use BusyBox date with explicit format
             local formatted_timestamp="${year}-${month}-${day} ${hour}:${minute}:${second}"
-            echo "  → Debug: Formatted for BusyBox: '$formatted_timestamp'" >&2
             creation_time=$(date -d "$formatted_timestamp" +%s 2>/dev/null || echo "0")
-            echo "  → Debug: Using BusyBox date, parsed to: $creation_time" >&2
         fi
         
         if [ "$creation_time" = "0" ]; then
-            echo "  → Debug: Failed to parse timestamp, returning 0" >&2
             echo "0"
         else
-            local age_seconds=$((current_time - creation_time))
-            echo "  → Debug: Current time: $current_time, Creation time: $creation_time, Age: $age_seconds seconds" >&2
-            echo "$age_seconds"
+            echo $((current_time - creation_time))
         fi
     }
     
@@ -101,11 +92,9 @@ data:
     MAX_AGE_SECONDS=$(( {{ .Values.cleanup.maxAge }} * 3600 ))
     
     # Find and process all namespaces
-    echo "Debug: Getting namespace data..." >&2
     kubectl get namespaces \
       -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.creationTimestamp}{"\t"}{.metadata.labels}{"\n"}{end}' | \
       while IFS=$'\t' read -r namespace timestamp labels; do
-        echo "Debug: Read line - namespace: '$namespace', timestamp: '$timestamp', labels: '$labels'" >&2
         if [ -z "$namespace" ] || [ -z "$timestamp" ]; then
           continue
         fi
@@ -125,6 +114,16 @@ data:
         if ! matches_pattern "$namespace"; then
           echo "  → Namespace $namespace does not match any allowed patterns, skipping"
           continue
+        fi
+        
+        # For matching namespaces, show age comparison with culling threshold
+        local remaining_seconds=$((MAX_AGE_SECONDS - age_seconds))
+        local remaining_hours=$((remaining_seconds / 3600))
+        if [ "$remaining_seconds" -gt 0 ]; then
+          echo "  → Namespace $namespace has ${remaining_hours}h remaining before cleanup (${age_display} < {{ .Values.cleanup.maxAge }}h threshold)"
+        else
+          local overdue_hours=$((-remaining_hours))
+          echo "  → Namespace $namespace is ${overdue_hours}h overdue for cleanup (${age_display} > {{ .Values.cleanup.maxAge }}h threshold)"
         fi
         
         if [ "$age_seconds" -gt "$MAX_AGE_SECONDS" ]; then
@@ -147,8 +146,6 @@ data:
           {{- end }}
           
           echo "  → Cleanup completed for namespace: $namespace"
-        else
-          echo "  → Namespace $namespace is within age limit (${age_display} < {{ .Values.cleanup.maxAge }}h), skipping"
         fi
       done
     
