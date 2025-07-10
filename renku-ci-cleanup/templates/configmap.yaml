@@ -72,6 +72,18 @@ data:
         fi
     }
     
+    # Function to format hours to days+hours for thresholds
+    format_hours_threshold() {
+        local hours="$1"
+        local days=$((hours / 24))
+        
+        if [ $days -gt 0 ]; then
+            echo "${days}d ($((hours % 24))h)"
+        else
+            echo "${hours}h"
+        fi
+    }
+    
     # Function to check if namespace matches any allowed pattern
     matches_pattern() {
         local namespace="$1"
@@ -119,15 +131,16 @@ data:
         # For matching namespaces, show age comparison with culling threshold
         remaining_seconds=$((MAX_AGE_SECONDS - age_seconds))
         remaining_hours=$((remaining_seconds / 3600))
+        threshold_display=$(format_hours_threshold {{ .Values.cleanup.maxAge }})
         if [ "$remaining_seconds" -gt 0 ]; then
-          echo "  → Namespace $namespace has ${remaining_hours}h remaining before cleanup (${age_display} < {{ .Values.cleanup.maxAge }}h threshold)"
+          echo "  → Namespace $namespace has ${remaining_hours}h remaining before cleanup (${age_display} < ${threshold_display} threshold)"
         else
           overdue_hours=$((-remaining_hours))
-          echo "  → Namespace $namespace is ${overdue_hours}h overdue for cleanup (${age_display} > {{ .Values.cleanup.maxAge }}h threshold)"
+          echo "  → Namespace $namespace is ${overdue_hours}h overdue for cleanup (${age_display} > ${threshold_display} threshold)"
         fi
         
         if [ "$age_seconds" -gt "$MAX_AGE_SECONDS" ]; then
-          echo "  → Namespace $namespace is older than {{ .Values.cleanup.maxAge }} hours, cleaning up..."
+          echo "  → Namespace $namespace is older than ${threshold_display}, cleaning up..."
           
           {{- if .Values.cleanup.dryRun }}
           echo "  → DRY RUN: Would clean up namespace $namespace"
@@ -143,9 +156,8 @@ data:
             echo "  → rdu not available, performing manual cleanup"
             kubectl delete namespace "$namespace" --timeout=300s || echo "  → Failed to delete namespace $namespace"
           fi
-          {{- end }}
-          
           echo "  → Cleanup completed for namespace: $namespace"
+          {{- end }}
         fi
       done
     
