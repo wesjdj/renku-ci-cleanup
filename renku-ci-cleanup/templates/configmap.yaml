@@ -37,15 +37,25 @@ data:
         # Kubernetes timestamps are in ISO 8601 format, need to handle them properly
         local creation_time
         if command -v gdate >/dev/null 2>&1; then
-            # Use GNU date if available (macOS with coreutils)
+            # Use GNU date if available (Linux with coreutils)
             creation_time=$(gdate -d "$timestamp" +%s 2>/dev/null || echo "0")
             echo "  → Debug: Using gdate, parsed to: $creation_time" >&2
         else
-            # Convert ISO 8601 to a format that BSD date can handle
-            local converted_timestamp=$(echo "$timestamp" | sed 's/T/ /' | sed 's/Z$//')
-            echo "  → Debug: Converted timestamp: '$converted_timestamp'" >&2
-            creation_time=$(date -j -f "%Y-%m-%d %H:%M:%S" "$converted_timestamp" +%s 2>/dev/null || echo "0")
-            echo "  → Debug: Using BSD date, parsed to: $creation_time" >&2
+            # For Alpine Linux/BusyBox date, we need to parse the ISO 8601 format manually
+            # Format: 2025-05-28T13:50:39Z
+            local year month day hour minute second
+            year=$(echo "$timestamp" | cut -d'-' -f1)
+            month=$(echo "$timestamp" | cut -d'-' -f2)
+            day=$(echo "$timestamp" | cut -d'T' -f1 | cut -d'-' -f3)
+            hour=$(echo "$timestamp" | cut -d'T' -f2 | cut -d':' -f1)
+            minute=$(echo "$timestamp" | cut -d':' -f2)
+            second=$(echo "$timestamp" | cut -d':' -f3 | sed 's/Z$//')
+            
+            # Use BusyBox date with explicit format
+            local formatted_timestamp="${year}-${month}-${day} ${hour}:${minute}:${second}"
+            echo "  → Debug: Formatted for BusyBox: '$formatted_timestamp'" >&2
+            creation_time=$(date -d "$formatted_timestamp" +%s 2>/dev/null || echo "0")
+            echo "  → Debug: Using BusyBox date, parsed to: $creation_time" >&2
         fi
         
         if [ "$creation_time" = "0" ]; then
