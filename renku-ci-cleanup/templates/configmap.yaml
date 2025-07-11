@@ -22,6 +22,16 @@ data:
     echo "Name pattern enforcement: disabled"
     {{- end }}
     
+    {{- if .Values.cleanup.prCleanup.enabled }}
+    echo "PR-based cleanup: enabled"
+    echo "Repository mappings:"
+    {{- range .Values.cleanup.prCleanup.repositories }}
+    echo "  - {{ .namespacePattern }} -> {{ .repo }}"
+    {{- end }}
+    {{- else }}
+    echo "PR-based cleanup: disabled"
+    {{- end }}
+    
     {{- if .Values.cleanup.dryRun }}
     echo "DRY RUN MODE: No actual deletions will be performed"
     {{- end }}
@@ -100,6 +110,81 @@ data:
         {{- end }}
     }
     
+    {{- if .Values.cleanup.prCleanup.enabled }}
+    # Function to check GitHub PR status
+    check_pr_status() {
+        local namespace="$1"
+        local github_token="${GITHUB_TOKEN}"
+        
+        if [ -z "$github_token" ]; then
+            echo "  → GitHub token not configured, skipping PR status check"
+            return 1
+        fi
+        
+        # Check each repository mapping
+        {{- range .Values.cleanup.prCleanup.repositories }}
+        if [[ "$namespace" =~ {{ .namespacePattern }} ]]; then
+            local pr_number
+            {{- if .suffixPattern }}
+            pr_number=$(echo "$namespace" | sed -E 's/{{ .namespacePattern }}/\1/')
+            {{- else }}
+            pr_number="${BASH_REMATCH[1]}"
+            {{- end }}
+            
+            if [ -z "$pr_number" ]; then
+                echo "  → Could not extract PR number from namespace $namespace"
+                return 1
+            fi
+            
+            echo "  → Checking PR #$pr_number status in {{ .repo }}"
+            
+            # Query GitHub API for PR status
+            local pr_response
+            pr_response=$(curl -s -H "Authorization: token $github_token" \
+                "https://api.github.com/repos/{{ .repo }}/pulls/$pr_number" 2>/dev/null)
+            
+            if [ $? -ne 0 ]; then
+                echo "  → Failed to query GitHub API for PR #$pr_number"
+                return 1
+            fi
+            
+            # Check if PR exists and get its state
+            local pr_state
+            pr_state=$(echo "$pr_response" | grep -o '"state":[[:space:]]*"[^"]*"' | sed 's/"state":[[:space:]]*"\([^"]*\)"/\1/')
+            
+            if [ -z "$pr_state" ]; then
+                echo "  → PR #$pr_number not found in {{ .repo }}"
+                return 0  # PR doesn't exist, can clean up
+            fi
+            
+            echo "  → PR #$pr_number state: $pr_state"
+            
+            # Check if PR is closed or merged
+            if [ "$pr_state" = "closed" ]; then
+                # For closed PRs, check if it was merged
+                local merged
+                merged=$(echo "$pr_response" | grep -o '"merged":[[:space:]]*[^,}]*' | sed 's/"merged":[[:space:]]*\([^,}]*\)/\1/')
+                if [ "$merged" = "true" ]; then
+                    echo "  → PR #$pr_number is merged, eligible for cleanup"
+                else
+                    echo "  → PR #$pr_number is closed but not merged, eligible for cleanup"
+                fi
+                return 0  # Can clean up
+            elif [ "$pr_state" = "open" ]; then
+                echo "  → PR #$pr_number is still open, skipping cleanup"
+                return 1  # Cannot clean up
+            else
+                echo "  → PR #$pr_number has unknown state: $pr_state"
+                return 1  # Unknown state, skip cleanup
+            fi
+        fi
+        {{- end }}
+        
+        echo "  → Namespace $namespace does not match any PR cleanup patterns"
+        return 1  # No matching pattern
+    }
+    {{- end }}
+    
     # Get maximum age in seconds
     MAX_AGE_SECONDS=$(( {{ .Values.cleanup.maxAge }} * 3600 ))
     
@@ -139,11 +224,33 @@ data:
           echo "  → Namespace $namespace is ${overdue_hours}h overdue for cleanup (${age_display} > ${threshold_display} threshold)"
         fi
         
+        # Check cleanup conditions
+        should_cleanup=false
+        cleanup_reason=""
+        
+        # Check age-based cleanup
         if [ "$age_seconds" -gt "$MAX_AGE_SECONDS" ]; then
-          echo "  → Namespace $namespace is older than ${threshold_display}, cleaning up..."
+          should_cleanup=true
+          cleanup_reason="age-based (${age_display} > ${threshold_display})"
+        fi
+        
+        {{- if .Values.cleanup.prCleanup.enabled }}
+        # Check PR-based cleanup
+        if check_pr_status "$namespace"; then
+          should_cleanup=true
+          if [ -n "$cleanup_reason" ]; then
+            cleanup_reason="$cleanup_reason and PR-based"
+          else
+            cleanup_reason="PR-based (closed/merged PR)"
+          fi
+        fi
+        {{- end }}
+        
+        if [ "$should_cleanup" = "true" ]; then
+          echo "  → Namespace $namespace eligible for cleanup: $cleanup_reason"
           
           {{- if .Values.cleanup.dryRun }}
-          echo "  → DRY RUN: Would clean up namespace $namespace"
+          echo "  → DRY RUN: Would clean up namespace $namespace ($cleanup_reason)"
           {{- else }}
           # Use rdu cleanup command with force flag to avoid interactive prompts
           if command -v rdu >/dev/null 2>&1; then

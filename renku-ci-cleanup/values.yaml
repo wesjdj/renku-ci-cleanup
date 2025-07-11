@@ -46,6 +46,24 @@ cleanup:
   
   # Dry run mode - set to true to only log what would be deleted
   dryRun: false
+  
+  # GitHub PR-based cleanup configuration
+  # Maps namespace patterns to GitHub repositories for PR status checking
+  # Format: namespace regex pattern -> {repo: "owner/repo", suffixPattern: "regex"}
+  prCleanup:
+    enabled: false
+    # GitHub API token for accessing PR status (required if prCleanup.enabled is true)
+    # Should be provided via secret or environment variable
+    githubToken: ""
+    # Repository mappings
+    repositories:
+      - namespacePattern: "^ci-renku-(.+)$"
+        repo: "SwissDataScienceCenter/renku"
+        suffixPattern: "(.+)"
+      - namespacePattern: "^renku-blog-ci-(.+)$"
+        repo: "SwissDataScienceCenter/renku-blog"
+        suffixPattern: "(.+)"
+      # Example: if namespace is "ci-renku-1234", it maps to PR #1234 in SwissDataScienceCenter/renku
 
 # Service account configuration
 serviceAccount:
